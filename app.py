@@ -635,7 +635,10 @@ with tabs[4]:
 
     with img_col:
         # Robot astronaut image placeholder
+
         robot_img_path = "robot.png"
+
+        robot_img_path = "D:\Mocoworks\repos\streamlit tamil astronomy\robot.png"
         if os.path.exists(robot_img_path):
             st.image(robot_img_path, use_container_width=True)
         else:
