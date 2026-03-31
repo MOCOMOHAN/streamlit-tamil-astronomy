@@ -664,12 +664,20 @@ with tabs[4]:
 
     chat_col, img_col = st.columns([3, 1])
 
+    # Render image column FIRST so it doesn't disturb chat_col on rerun
     with img_col:
-        # Robot astronaut image placeholder
         robot_img_path = "robot.png"
-        if os.path.exists(robot_img_path):
-            st.image(robot_img_path, use_container_width=True)
-        else:
+        # Try loading image from bytes to avoid path-resolution issues on Streamlit Cloud
+        _img_loaded = False
+        try:
+            with open(robot_img_path, "rb") as _f:
+                _img_bytes = _f.read()
+            st.image(_img_bytes, use_container_width=True)
+            _img_loaded = True
+        except (FileNotFoundError, OSError):
+            pass
+
+        if not _img_loaded:
             st.markdown(f"""
             <div class="card" style="text-align:center;padding:2rem 1rem;">
                 <div style="font-size:5rem;">🤖</div>
@@ -678,9 +686,6 @@ with tabs[4]:
                 </div>
                 <div style="opacity:0.6;font-size:0.75rem;margin-top:0.5rem;">
                     உங்கள் AI விண்வெளி வீரர்
-                </div>
-                <div style="opacity:0.45;font-size:0.65rem;margin-top:1rem;">
-                    Robot படத்தை<br>பதிவேற்றுங்கள்
                 </div>
             </div>""", unsafe_allow_html=True)
 
@@ -692,23 +697,28 @@ with tabs[4]:
         </div>""", unsafe_allow_html=True)
 
     with chat_col:
-        # Chat history display
+        # Chat history display — fixed-height scrollable container
         chat_container = st.container()
         with chat_container:
             if not st.session_state.chat_history:
                 st.markdown(f"""
+                <div style="max-height:420px;overflow-y:auto;padding:0.5rem;">
                 <div class="chat-bubble-bot">
                     வணக்கம்! நான் ASTRO-தமிழன், உங்கள் AI விண்வெளி வீரர். 
                     சர்வதேச விண்வெளி நிலையத்தில் இருந்து உங்களுடன் பேசுகிறேன்! 🚀<br><br>
                     விண்வெளி பற்றி என்ன கேள்வியும் கேளுங்கள் — தமிழிலோ, ஆங்கிலத்திலோ கேட்கலாம்.
                     நான் தமிழிலேயே பதில் சொல்வேன்! 🌌
+                </div>
                 </div>""", unsafe_allow_html=True)
             else:
+                bubbles_html = '<div style="max-height:420px;overflow-y:auto;padding:0.5rem;">'
                 for msg in st.session_state.chat_history:
                     if msg["role"] == "user":
-                        st.markdown(f'<div class="chat-bubble-user">{msg["content"]}</div>', unsafe_allow_html=True)
+                        bubbles_html += f'<div class="chat-bubble-user">{msg["content"]}</div>'
                     else:
-                        st.markdown(f'<div class="chat-bubble-bot">{msg["content"]}</div>', unsafe_allow_html=True)
+                        bubbles_html += f'<div class="chat-bubble-bot">{msg["content"]}</div>'
+                bubbles_html += '</div>'
+                st.markdown(bubbles_html, unsafe_allow_html=True)
 
         # Input
         user_input = st.text_input(
@@ -730,52 +740,63 @@ with tabs[4]:
             st.session_state.chat_history.append({"role":"user","content":user_input})
 
             def call_openai(messages, api_key):
-                url = "https://api.openai.com/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-                body = {
-                    "model": "gpt-4o-mini",
-                    "messages": messages,
-                    "max_tokens": 400,
-                    "temperature": 0.85,
-                }
-                r = requests.post(url, headers=headers, json=body, timeout=20)
-                if r.status_code == 200:
-                    return r.json()["choices"][0]["message"]["content"]
-                return None
+                try:
+                    url = "https://api.openai.com/v1/chat/completions"
+                    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                    body = {
+                        "model": "gpt-4o-mini",
+                        "messages": messages,
+                        "max_tokens": 400,
+                        "temperature": 0.85,
+                    }
+                    r = requests.post(url, headers=headers, json=body, timeout=30)
+                    if r.status_code == 200:
+                        return r.json()["choices"][0]["message"]["content"]
+                    else:
+                        # Surface the actual error for debugging
+                        err = r.json().get("error", {}).get("message", f"HTTP {r.status_code}")
+                        st.error(f"OpenAI பிழை: {err}")
+                        return None
+                except Exception as e:
+                    st.error(f"இணைப்பு பிழை: {e}")
+                    return None
 
             system_prompt = """நீ ASTRO-தமிழன் என்ற AI விண்வெளி வீரர். நீ சர்வதேச விண்வெளி நிலையத்தில் (ISS) இருந்து பேசுகிறாய்.
 எப்போதும் தமிழிலேயே பதில் சொல் (user ஆங்கிலத்தில் கேட்டாலும் தமிழிலேயே பதில் சொல்).
 நீ உற்சாகமான, நட்பான, அறிவியல் ஆர்வமுள்ள விண்வெளி வீரர். ISS வாழ்க்கை, விண்வெளி அறிவியல், கிரகங்கள், நட்சத்திரங்கள் பற்றி சுவாரஸ்யமாக விளக்கு.
 சிறு emoji சேர்க்கலாம். பதில்கள் 3-5 வாக்கியங்களில் இருக்கட்டும்."""
 
+            reply = None
+
             if OPENAI_API_KEY:
-                messages = [{"role":"system","content":system_prompt}]
+                messages_to_send = [{"role":"system","content":system_prompt}]
+                # Include prior conversation context (exclude the last user msg we just appended)
                 for m in st.session_state.chat_history[:-1]:
-                    messages.append(m)
-                messages.append({"role":"user","content":user_input})
+                    messages_to_send.append({"role": m["role"], "content": m["content"]})
+                messages_to_send.append({"role":"user","content":user_input})
 
                 with st.spinner("ASTRO-தமிழன் பதில் தயாரிக்கிறார்..."):
-                    reply = call_openai(messages, OPENAI_API_KEY)
+                    reply = call_openai(messages_to_send, OPENAI_API_KEY)
                     if not reply:
                         reply = "மன்னிக்கவும், தற்போது இணைப்பில் சிக்கல் உள்ளது. சிறிது நேரம் கழித்து முயற்சிக்கவும்! 🛰️"
             else:
-                # Simulated replies
+                # Simulated replies when no API key is set
                 simulated = {
                     "iss": "ISS-ல் வாழ்க்கை மிகவும் சுவாரஸ்யமாக உள்ளது! 🚀 நாங்கள் ஒவ்வொரு 90 நிமிடத்திலும் பூமியை ஒரு முறை சுற்றுகிறோம். இங்கே எல்லாமே மிதக்கும் — தண்ணீர், உணவு, நாங்களும்கூட! நாளொன்றுக்கு 16 சூரிய உதயங்களை நாங்கள் பார்க்கிறோம்.",
                     "mars": "செவ்வாய் கிரகம் பூமியை விட 6 மடங்கு சிறியது. 🔴 அங்கு ஒரு நாள் 24 மணி 37 நிமிடம். Perseverance ரோவர் இப்போது அங்கு ஆராய்ச்சி செய்கிறது. எதிர்காலத்தில் மனிதர்கள் செவ்வாயில் வாழலாம் என்று விஞ்ஞானிகள் நம்புகிறார்கள்!",
                     "moon": "சந்திரன் பூமியிலிருந்து சராசரியாக 3,84,400 கி.மீ தொலைவில் உள்ளது. 🌕 1969-ல் Neil Armstrong முதன்முதலில் சந்திரனில் கால் வைத்தார். இந்தியாவின் சந்திரயான்-3 தென் துருவத்தில் தரையிறங்கி வரலாறு படைத்தது!",
                     "star": "நட்சத்திரங்கள் வாயு மற்றும் தூளால் ஆனவை. ⭐ நம் சூரியன் ஒரு நட்சத்திரமே! பிரபஞ்சத்தில் கோடானகோடி நட்சத்திரங்கள் உள்ளன. Betelgeuse நட்சத்திரம் சூரியனை விட 700 மடங்கு பெரியது!",
                 }
-                reply = None
                 q_lower = user_input.lower()
-                for k,v in simulated.items():
+                for k, v in simulated.items():
                     if k in q_lower:
                         reply = v
                         break
                 if not reply:
-                    reply = f"மிகவும் சுவாரஸ்யமான கேள்வி! 🌌 ISS-லிருந்து நான் இதை சொல்ல விரும்புகிறேன்: விண்வெளி ஆராய்ச்சி மனிதகுலத்தின் மிகப்பெரிய சாதனை. OpenAI API விசை அமைக்கப்பட்டால் விரிவான பதில் தருவேன்!"
+                    reply = "மிகவும் சுவாரஸ்யமான கேள்வி! 🌌 ISS-லிருந்து நான் இதை சொல்ல விரும்புகிறேன்: விண்வெளி ஆராய்ச்சி மனிதகுலத்தின் மிகப்பெரிய சாதனை. OpenAI API விசை அமைக்கப்பட்டால் விரிவான பதில் தருவேன்!"
 
-            st.session_state.chat_history.append({"role":"assistant","content":reply})
+            if reply:
+                st.session_state.chat_history.append({"role":"assistant","content":reply})
             st.rerun()
 
 # ─────────────────────────────────────────────
