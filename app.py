@@ -20,8 +20,15 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 # API KEYS  – set via Streamlit secrets or env
 # ─────────────────────────────────────────────
-NASA_API_KEY  = st.secrets.get("NASA_API_KEY",  os.getenv("NASA_API_KEY",  "DEMO_KEY"))
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+try:
+    NASA_API_KEY = st.secrets["NASA_API_KEY"]
+except Exception:
+    NASA_API_KEY = os.getenv("NASA_API_KEY", "DEMO_KEY")
+
+try:
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except Exception:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # ─────────────────────────────────────────────
 # THEME STATE
@@ -32,6 +39,8 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "iss_last_update" not in st.session_state:
     st.session_state.iss_last_update = time.time()
+if "input_key" not in st.session_state:
+    st.session_state.input_key = 0
 
 ISS_UPDATE_INTERVAL = 120  # seconds (2 minutes)
 
@@ -662,21 +671,29 @@ with tabs[4]:
     st.markdown(f'<div class="section-title">👩‍🚀 விண்வெளி உதவியாளர்</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-subtitle">தமிழில் பேசும் AI விண்வெளி வீரர் — உங்கள் கேள்விகளுக்கு பதில் தருவேன்!</div>', unsafe_allow_html=True)
 
+    # API key status banner
+    if OPENAI_API_KEY:
+        st.success("✅ OpenAI இணைக்கப்பட்டுள்ளது — AI பதில்கள் இயக்கத்தில் உள்ளன!")
+    else:
+        st.error("❌ OpenAI API விசை இல்லை. Streamlit Cloud → App Settings → Secrets-ல் OPENAI_API_KEY சேர்க்கவும். தற்போது உருவகப்படுத்தப்பட்ட பதில்கள் காட்டப்படும்.")
+
     chat_col, img_col = st.columns([3, 1])
 
-    # Render image column FIRST so it doesn't disturb chat_col on rerun
     with img_col:
-        robot_img_path = "robot.png"
-        # Try loading image from bytes to avoid path-resolution issues on Streamlit Cloud
+        import base64 as _b64
         _img_loaded = False
         try:
-            with open(robot_img_path, "rb") as _f:
-                _img_bytes = _f.read()
-            st.image(_img_bytes, use_container_width=True)
+            with open("robot.png", "rb") as _f:
+                _img_b64 = _b64.b64encode(_f.read()).decode()
+            st.markdown(f"""
+            <div style="background:rgba(5,10,26,0.9);border-radius:16px;padding:0.6rem;
+                        border:1px solid rgba(79,195,247,0.2);text-align:center;">
+                <img src="data:image/png;base64,{_img_b64}"
+                     style="width:100%;border-radius:10px;mix-blend-mode:lighten;" />
+            </div>""", unsafe_allow_html=True)
             _img_loaded = True
         except (FileNotFoundError, OSError):
             pass
-
         if not _img_loaded:
             st.markdown(f"""
             <div class="card" style="text-align:center;padding:2rem 1rem;">
@@ -697,34 +714,33 @@ with tabs[4]:
         </div>""", unsafe_allow_html=True)
 
     with chat_col:
-        # Chat history display — fixed-height scrollable container
+        # Chat history display
         chat_container = st.container()
         with chat_container:
             if not st.session_state.chat_history:
-                st.markdown(f"""
-                <div style="max-height:420px;overflow-y:auto;padding:0.5rem;">
+                st.markdown("""
+                <div style="max-height:400px;overflow-y:auto;padding:0.25rem;">
                 <div class="chat-bubble-bot">
-                    வணக்கம்! நான் ASTRO-தமிழன், உங்கள் AI விண்வெளி வீரர். 
+                    வணக்கம்! நான் ASTRO-தமிழன், உங்கள் AI விண்வெளி வீரர்.
                     சர்வதேச விண்வெளி நிலையத்தில் இருந்து உங்களுடன் பேசுகிறேன்! 🚀<br><br>
                     விண்வெளி பற்றி என்ன கேள்வியும் கேளுங்கள் — தமிழிலோ, ஆங்கிலத்திலோ கேட்கலாம்.
                     நான் தமிழிலேயே பதில் சொல்வேன்! 🌌
-                </div>
-                </div>""", unsafe_allow_html=True)
+                </div></div>""", unsafe_allow_html=True)
             else:
-                bubbles_html = '<div style="max-height:420px;overflow-y:auto;padding:0.5rem;">'
+                _bubbles = '<div style="max-height:400px;overflow-y:auto;padding:0.25rem;">'
                 for msg in st.session_state.chat_history:
                     if msg["role"] == "user":
-                        bubbles_html += f'<div class="chat-bubble-user">{msg["content"]}</div>'
+                        _bubbles += f'<div class="chat-bubble-user">{msg["content"]}</div>'
                     else:
-                        bubbles_html += f'<div class="chat-bubble-bot">{msg["content"]}</div>'
-                bubbles_html += '</div>'
-                st.markdown(bubbles_html, unsafe_allow_html=True)
+                        _bubbles += f'<div class="chat-bubble-bot">{msg["content"]}</div>'
+                _bubbles += '</div>'
+                st.markdown(_bubbles, unsafe_allow_html=True)
 
         # Input
         user_input = st.text_input(
             "உங்கள் கேள்வி:",
             placeholder="விண்வெளி பற்றி கேளுங்கள்... (e.g. ISS எப்படி இருக்கும்?)",
-            key="chat_input",
+            key=f"chat_input_{st.session_state.input_key}",
             label_visibility="collapsed"
         )
 
@@ -753,9 +769,8 @@ with tabs[4]:
                     if r.status_code == 200:
                         return r.json()["choices"][0]["message"]["content"]
                     else:
-                        # Surface the actual error for debugging
-                        err = r.json().get("error", {}).get("message", f"HTTP {r.status_code}")
-                        st.error(f"OpenAI பிழை: {err}")
+                        err_msg = r.json().get("error", {}).get("message", f"HTTP {r.status_code}")
+                        st.error(f"OpenAI பிழை: {err_msg}")
                         return None
                 except Exception as e:
                     st.error(f"இணைப்பு பிழை: {e}")
@@ -766,37 +781,39 @@ with tabs[4]:
 நீ உற்சாகமான, நட்பான, அறிவியல் ஆர்வமுள்ள விண்வெளி வீரர். ISS வாழ்க்கை, விண்வெளி அறிவியல், கிரகங்கள், நட்சத்திரங்கள் பற்றி சுவாரஸ்யமாக விளக்கு.
 சிறு emoji சேர்க்கலாம். பதில்கள் 3-5 வாக்கியங்களில் இருக்கட்டும்."""
 
-            reply = None
+            # Debug: show key status in sidebar (remove after confirming)
+            if not OPENAI_API_KEY:
+                st.warning("⚠️ OPENAI_API_KEY இல்லை — Streamlit Cloud → Settings → Secrets-ல் சேர்க்கவும்.")
 
             if OPENAI_API_KEY:
-                messages_to_send = [{"role":"system","content":system_prompt}]
-                # Include prior conversation context (exclude the last user msg we just appended)
+                _msgs = [{"role":"system","content":system_prompt}]
                 for m in st.session_state.chat_history[:-1]:
-                    messages_to_send.append({"role": m["role"], "content": m["content"]})
-                messages_to_send.append({"role":"user","content":user_input})
+                    _msgs.append({"role": m["role"], "content": m["content"]})
+                _msgs.append({"role":"user","content":user_input})
 
                 with st.spinner("ASTRO-தமிழன் பதில் தயாரிக்கிறார்..."):
-                    reply = call_openai(messages_to_send, OPENAI_API_KEY)
+                    reply = call_openai(_msgs, OPENAI_API_KEY)
                     if not reply:
                         reply = "மன்னிக்கவும், தற்போது இணைப்பில் சிக்கல் உள்ளது. சிறிது நேரம் கழித்து முயற்சிக்கவும்! 🛰️"
             else:
-                # Simulated replies when no API key is set
+                # Simulated replies
                 simulated = {
                     "iss": "ISS-ல் வாழ்க்கை மிகவும் சுவாரஸ்யமாக உள்ளது! 🚀 நாங்கள் ஒவ்வொரு 90 நிமிடத்திலும் பூமியை ஒரு முறை சுற்றுகிறோம். இங்கே எல்லாமே மிதக்கும் — தண்ணீர், உணவு, நாங்களும்கூட! நாளொன்றுக்கு 16 சூரிய உதயங்களை நாங்கள் பார்க்கிறோம்.",
                     "mars": "செவ்வாய் கிரகம் பூமியை விட 6 மடங்கு சிறியது. 🔴 அங்கு ஒரு நாள் 24 மணி 37 நிமிடம். Perseverance ரோவர் இப்போது அங்கு ஆராய்ச்சி செய்கிறது. எதிர்காலத்தில் மனிதர்கள் செவ்வாயில் வாழலாம் என்று விஞ்ஞானிகள் நம்புகிறார்கள்!",
                     "moon": "சந்திரன் பூமியிலிருந்து சராசரியாக 3,84,400 கி.மீ தொலைவில் உள்ளது. 🌕 1969-ல் Neil Armstrong முதன்முதலில் சந்திரனில் கால் வைத்தார். இந்தியாவின் சந்திரயான்-3 தென் துருவத்தில் தரையிறங்கி வரலாறு படைத்தது!",
                     "star": "நட்சத்திரங்கள் வாயு மற்றும் தூளால் ஆனவை. ⭐ நம் சூரியன் ஒரு நட்சத்திரமே! பிரபஞ்சத்தில் கோடானகோடி நட்சத்திரங்கள் உள்ளன. Betelgeuse நட்சத்திரம் சூரியனை விட 700 மடங்கு பெரியது!",
                 }
+                reply = None
                 q_lower = user_input.lower()
-                for k, v in simulated.items():
+                for k,v in simulated.items():
                     if k in q_lower:
                         reply = v
                         break
                 if not reply:
-                    reply = "மிகவும் சுவாரஸ்யமான கேள்வி! 🌌 ISS-லிருந்து நான் இதை சொல்ல விரும்புகிறேன்: விண்வெளி ஆராய்ச்சி மனிதகுலத்தின் மிகப்பெரிய சாதனை. OpenAI API விசை அமைக்கப்பட்டால் விரிவான பதில் தருவேன்!"
+                    reply = f"மிகவும் சுவாரஸ்யமான கேள்வி! 🌌 ISS-லிருந்து நான் இதை சொல்ல விரும்புகிறேன்: விண்வெளி ஆராய்ச்சி மனிதகுலத்தின் மிகப்பெரிய சாதனை. OpenAI API விசை அமைக்கப்பட்டால் விரிவான பதில் தருவேன்!"
 
-            if reply:
-                st.session_state.chat_history.append({"role":"assistant","content":reply})
+            st.session_state.chat_history.append({"role":"assistant","content":reply})
+            st.session_state.input_key += 1
             st.rerun()
 
 # ─────────────────────────────────────────────
