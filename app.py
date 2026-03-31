@@ -30,6 +30,10 @@ if "dark_mode" not in st.session_state:
     st.session_state.dark_mode = True
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "iss_last_update" not in st.session_state:
+    st.session_state.iss_last_update = time.time()
+
+ISS_UPDATE_INTERVAL = 120  # seconds (2 minutes)
 
 dark = st.session_state.dark_mode
 
@@ -374,17 +378,43 @@ with tabs[1]:
     st.markdown(f'<div class="section-title">🛰️ சர்வதேச விண்வெளி நிலையம் (ISS)</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-subtitle">நேர்மையான நிலை • வேகம் • கூட்டுறவு</div>', unsafe_allow_html=True)
 
-    # Simulated orbital position
+    # ── ISS position: update once every 2 minutes ──────────────────────
     now_ts = time.time()
-    # ISS orbits every ~92 minutes; simulate lat/lon
+    elapsed = now_ts - st.session_state.iss_last_update
+    if elapsed >= ISS_UPDATE_INTERVAL:
+        st.session_state.iss_last_update = now_ts
+        elapsed = 0
+
+    # Snap position to the last update timestamp so it stays frozen
+    # until the next 2-minute tick
+    pos_ts = st.session_state.iss_last_update
+    seconds_until_next = ISS_UPDATE_INTERVAL - elapsed
+
     orbit_period = 92 * 60
-    phase = (now_ts % orbit_period) / orbit_period * 2 * math.pi
+    phase = (pos_ts % orbit_period) / orbit_period * 2 * math.pi
     iss_lat = 51.6 * math.sin(phase * 1.1)
-    iss_lon = ((now_ts / 420) % 360) - 180
+    iss_lon = ((pos_ts / 420) % 360) - 180
     iss_alt = 408.3 + 2.1 * math.sin(phase * 0.7)
     iss_spd = 27600 + 120 * math.sin(phase)
-    iss_orbit_num = int(now_ts / (92 * 60)) + 3000
+    iss_orbit_num = int(pos_ts / (92 * 60)) + 3000
     inclination = 51.6
+
+    # Schedule an automatic rerun at the next 2-minute boundary
+    st_autorefresh_placeholder = st.empty()
+    last_update_str = datetime.fromtimestamp(st.session_state.iss_last_update).strftime("%H:%M:%S")
+    st_autorefresh_placeholder.markdown(
+        f"""<div style="font-size:0.78rem;opacity:0.6;margin-bottom:0.6rem;">
+            🕐 கடைசி புதுப்பிப்பு: <b>{last_update_str}</b> &nbsp;|&nbsp;
+            ⏳ அடுத்த புதுப்பிப்பு: <b>{int(seconds_until_next)} வினாடிகளில்</b>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+    # Auto-rerun after remaining seconds (Streamlit >= 1.18 supports st.rerun inside fragments;
+    # use a lightweight JS meta-refresh injected once per cycle instead)
+    st.markdown(
+        f'<meta http-equiv="refresh" content="{int(seconds_until_next) + 1}">',
+        unsafe_allow_html=True,
+    )
 
     # Crew list (actual current-ish crew)
     crew = [
@@ -490,6 +520,7 @@ with tabs[1]:
             </div>""", unsafe_allow_html=True)
 
         if st.button("🔄 நிலையை புதுப்பி"):
+            st.session_state.iss_last_update = time.time()
             st.rerun()
 
 # ══════════════════════════════════════════════
@@ -635,10 +666,7 @@ with tabs[4]:
 
     with img_col:
         # Robot astronaut image placeholder
-
         robot_img_path = "robot.png"
-
-        robot_img_path = "D:\Mocoworks\repos\streamlit tamil astronomy\robot.png"
         if os.path.exists(robot_img_path):
             st.image(robot_img_path, use_container_width=True)
         else:
