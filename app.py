@@ -30,6 +30,11 @@ try:
 except Exception:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
 # ─────────────────────────────────────────────
 # THEME STATE
 # ─────────────────────────────────────────────
@@ -672,10 +677,24 @@ with tabs[4]:
     st.markdown('<div class="section-subtitle">தமிழில் பேசும் AI விண்வெளி வீரர் — உங்கள் கேள்விகளுக்கு பதில் தருவேன்!</div>', unsafe_allow_html=True)
 
     # API key status banner
-    if OPENAI_API_KEY:
-        st.success("✅ OpenAI இணைக்கப்பட்டுள்ளது — AI பதில்கள் இயக்கத்தில் உள்ளன!")
-    else:
-        st.error("❌ OpenAI API விசை இல்லை. Streamlit Cloud → App Settings → Secrets-ல் OPENAI_API_KEY சேர்க்கவும். தற்போது உருவகப்படுத்தப்பட்ட பதில்கள் காட்டப்படும்.")
+    _banner_col1, _banner_col2 = st.columns(2)
+    with _banner_col1:
+        if OPENAI_API_KEY:
+            st.success("✅ OpenAI இணைக்கப்பட்டுள்ளது")
+        else:
+            st.warning("⚠️ OpenAI API விசை இல்லை")
+    with _banner_col2:
+        if GEMINI_API_KEY:
+            st.success("✅ Gemini இணைக்கப்பட்டுள்ளது (backup)")
+        else:
+            st.warning("⚠️ Gemini API விசை இல்லை")
+    if not OPENAI_API_KEY and not GEMINI_API_KEY:
+        st.error("❌ எந்த API விசையும் இல்லை. Streamlit Secrets-ல் OPENAI_API_KEY அல்லது GEMINI_API_KEY சேர்க்கவும். தற்போது உருவகப்படுத்தப்பட்ட பதில்கள் காட்டப்படும்.")
+    elif OPENAI_API_KEY or GEMINI_API_KEY:
+        active = []
+        if OPENAI_API_KEY: active.append("OpenAI")
+        if GEMINI_API_KEY: active.append("Gemini")
+        st.info(f"🤖 AI இயக்கத்தில் உள்ளது ({' + '.join(active)}) — ஒன்று தோல்வியுற்றால் மற்றொன்று தானாக முயற்சிக்கும்!")
 
     chat_col, img_col = st.columns([3, 1])
 
@@ -756,6 +775,8 @@ with tabs[4]:
             st.session_state.chat_history.append({"role":"user","content":user_input})
 
             def call_openai(messages, api_key):
+                """Call OpenAI GPT-4o-mini. Returns (reply_text, error_type).
+                error_type: None = success, 'rate_limit' = 429, 'auth' = 401, 'other' = else."""
                 try:
                     url = "https://api.openai.com/v1/chat/completions"
                     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -767,36 +788,97 @@ with tabs[4]:
                     }
                     r = requests.post(url, headers=headers, json=body, timeout=30)
                     if r.status_code == 200:
-                        return r.json()["choices"][0]["message"]["content"]
+                        return r.json()["choices"][0]["message"]["content"], None
+                    elif r.status_code == 429:
+                        return None, "rate_limit"
+                    elif r.status_code == 401:
+                        return None, "auth"
                     else:
                         err_msg = r.json().get("error", {}).get("message", f"HTTP {r.status_code}")
-                        st.error(f"OpenAI பிழை: {err_msg}")
-                        return None
+                        return None, f"other:{err_msg}"
                 except Exception as e:
-                    st.error(f"இணைப்பு பிழை: {e}")
-                    return None
+                    return None, f"other:{e}"
+
+            def call_gemini(messages, api_key, system_prompt):
+                """Call Gemini 1.5 Flash. Returns (reply_text, error_type)."""
+                try:
+                    # Convert OpenAI-style messages to Gemini format
+                    gemini_contents = []
+                    for m in messages:
+                        if m["role"] == "system":
+                            continue  # system handled separately below
+                        role = "user" if m["role"] == "user" else "model"
+                        gemini_contents.append({"role": role, "parts": [{"text": m["content"]}]})
+
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+                    body = {
+                        "system_instruction": {"parts": [{"text": system_prompt}]},
+                        "contents": gemini_contents,
+                        "generationConfig": {"maxOutputTokens": 400, "temperature": 0.85},
+                    }
+                    r = requests.post(url, json=body, timeout=30)
+                    if r.status_code == 200:
+                        data = r.json()
+                        text = data["candidates"][0]["content"]["parts"][0]["text"]
+                        return text, None
+                    elif r.status_code == 429:
+                        return None, "rate_limit"
+                    elif r.status_code in (400, 403):
+                        return None, "auth"
+                    else:
+                        err_msg = r.json().get("error", {}).get("message", f"HTTP {r.status_code}")
+                        return None, f"other:{err_msg}"
+                except Exception as e:
+                    return None, f"other:{e}"
+
+            def get_ai_reply(user_msgs, system_prompt):
+                """Try OpenAI first, fall back to Gemini on any failure."""
+                provider_used = None
+                reply = None
+
+                if OPENAI_API_KEY:
+                    reply, err = call_openai(user_msgs, OPENAI_API_KEY)
+                    if reply:
+                        provider_used = "OpenAI"
+                    else:
+                        if err == "rate_limit":
+                            st.toast("⚡ OpenAI வேக வரம்பு — Gemini-க்கு மாறுகிறோம்...", icon="🔄")
+                        elif err == "auth":
+                            st.toast("🔑 OpenAI விசை தோல்வி — Gemini-க்கு மாறுகிறோம்...", icon="🔄")
+                        else:
+                            st.toast(f"⚠️ OpenAI பிழை — Gemini-க்கு மாறுகிறோம்...", icon="🔄")
+
+                if not reply and GEMINI_API_KEY:
+                    reply, err = call_gemini(user_msgs, GEMINI_API_KEY, system_prompt)
+                    if reply:
+                        provider_used = "Gemini"
+                    else:
+                        if err and err.startswith("other:"):
+                            st.error(f"Gemini பிழை: {err[6:]}")
+
+                return reply, provider_used
 
             system_prompt = """நீ ASTRO-தமிழன் என்ற AI விண்வெளி வீரர். நீ சர்வதேச விண்வெளி நிலையத்தில் (ISS) இருந்து பேசுகிறாய்.
 எப்போதும் தமிழிலேயே பதில் சொல் (user ஆங்கிலத்தில் கேட்டாலும் தமிழிலேயே பதில் சொல்).
 நீ உற்சாகமான, நட்பான, அறிவியல் ஆர்வமுள்ள விண்வெளி வீரர். ISS வாழ்க்கை, விண்வெளி அறிவியல், கிரகங்கள், நட்சத்திரங்கள் பற்றி சுவாரஸ்யமாக விளக்கு.
 சிறு emoji சேர்க்கலாம். பதில்கள் 3-5 வாக்கியங்களில் இருக்கட்டும்."""
 
-            # Debug: show key status in sidebar (remove after confirming)
-            if not OPENAI_API_KEY:
-                st.warning("⚠️ OPENAI_API_KEY இல்லை — Streamlit Cloud → Settings → Secrets-ல் சேர்க்கவும்.")
-
-            if OPENAI_API_KEY:
+            if OPENAI_API_KEY or GEMINI_API_KEY:
                 _msgs = [{"role":"system","content":system_prompt}]
                 for m in st.session_state.chat_history[:-1]:
                     _msgs.append({"role": m["role"], "content": m["content"]})
                 _msgs.append({"role":"user","content":user_input})
 
                 with st.spinner("ASTRO-தமிழன் பதில் தயாரிக்கிறார்..."):
-                    reply = call_openai(_msgs, OPENAI_API_KEY)
+                    reply, provider_used = get_ai_reply(_msgs, system_prompt)
+                    if reply and provider_used:
+                        # Small indicator of which provider responded
+                        provider_icon = "🟢 OpenAI" if provider_used == "OpenAI" else "🔵 Gemini"
+                        st.caption(f"{provider_icon} மூலம் பதில் வந்தது")
                     if not reply:
-                        reply = "மன்னிக்கவும், தற்போது இணைப்பில் சிக்கல் உள்ளது. சிறிது நேரம் கழித்து முயற்சிக்கவும்! 🛰️"
+                        reply = "மன்னிக்கவும், தற்போது இரண்டு AI சேவைகளிலும் இணைப்பில் சிக்கல் உள்ளது. சிறிது நேரம் கழித்து முயற்சிக்கவும்! 🛰️"
             else:
-                # Simulated replies
+                # Simulated replies when no API keys present
                 simulated = {
                     "iss": "ISS-ல் வாழ்க்கை மிகவும் சுவாரஸ்யமாக உள்ளது! 🚀 நாங்கள் ஒவ்வொரு 90 நிமிடத்திலும் பூமியை ஒரு முறை சுற்றுகிறோம். இங்கே எல்லாமே மிதக்கும் — தண்ணீர், உணவு, நாங்களும்கூட! நாளொன்றுக்கு 16 சூரிய உதயங்களை நாங்கள் பார்க்கிறோம்.",
                     "mars": "செவ்வாய் கிரகம் பூமியை விட 6 மடங்கு சிறியது. 🔴 அங்கு ஒரு நாள் 24 மணி 37 நிமிடம். Perseverance ரோவர் இப்போது அங்கு ஆராய்ச்சி செய்கிறது. எதிர்காலத்தில் மனிதர்கள் செவ்வாயில் வாழலாம் என்று விஞ்ஞானிகள் நம்புகிறார்கள்!",
@@ -805,12 +887,12 @@ with tabs[4]:
                 }
                 reply = None
                 q_lower = user_input.lower()
-                for k,v in simulated.items():
+                for k, v in simulated.items():
                     if k in q_lower:
                         reply = v
                         break
                 if not reply:
-                    reply = f"மிகவும் சுவாரஸ்யமான கேள்வி! 🌌 ISS-லிருந்து நான் இதை சொல்ல விரும்புகிறேன்: விண்வெளி ஆராய்ச்சி மனிதகுலத்தின் மிகப்பெரிய சாதனை. OpenAI API விசை அமைக்கப்பட்டால் விரிவான பதில் தருவேன்!"
+                    reply = "மிகவும் சுவாரஸ்யமான கேள்வி! 🌌 ISS-லிருந்து நான் இதை சொல்ல விரும்புகிறேன்: விண்வெளி ஆராய்ச்சி மனிதகுலத்தின் மிகப்பெரிய சாதனை. OPENAI_API_KEY அல்லது GEMINI_API_KEY அமைக்கப்பட்டால் விரிவான பதில் தருவேன்!"
 
             st.session_state.chat_history.append({"role":"assistant","content":reply})
             st.session_state.input_key += 1
