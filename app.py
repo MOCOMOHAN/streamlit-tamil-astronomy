@@ -49,7 +49,7 @@ if "input_key" not in st.session_state:
 if "pending_input" not in st.session_state:
     st.session_state.pending_input = ""
 
-ISS_UPDATE_INTERVAL = 120  # seconds (2 minutes)
+ISS_UPDATE_INTERVAL = 300  # seconds (5 minutes)
 
 dark = st.session_state.dark_mode
 
