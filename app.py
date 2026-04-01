@@ -46,6 +46,8 @@ if "iss_last_update" not in st.session_state:
     st.session_state.iss_last_update = time.time()
 if "input_key" not in st.session_state:
     st.session_state.input_key = 0
+if "pending_input" not in st.session_state:
+    st.session_state.pending_input = ""
 
 ISS_UPDATE_INTERVAL = 120  # seconds (2 minutes)
 
@@ -763,16 +765,25 @@ with tabs[4]:
             label_visibility="collapsed"
         )
 
+        # Save input to session state immediately so it survives button reruns
+        if user_input.strip():
+            st.session_state["pending_input"] = user_input.strip()
+
         send_col, clear_col = st.columns([3,1])
         with send_col:
             send = st.button("📨 அனுப்பு", use_container_width=True)
         with clear_col:
             if st.button("🗑️ அழி", use_container_width=True):
                 st.session_state.chat_history = []
+                st.session_state.pop("pending_input", None)
                 st.rerun()
 
-        if send and user_input.strip():
-            st.session_state.chat_history.append({"role":"user","content":user_input})
+        # Retrieve the saved input so it works even after widget key changes on rerun
+        pending = st.session_state.get("pending_input", "").strip()
+
+        if send and pending:
+            st.session_state.pop("pending_input", None)  # clear so it doesn't re-trigger
+            st.session_state.chat_history.append({"role":"user","content":pending})
 
             def call_openai(messages, api_key):
                 """Call OpenAI GPT-4o-mini. Returns (reply_text, error_type).
@@ -867,7 +878,7 @@ with tabs[4]:
                 _msgs = [{"role":"system","content":system_prompt}]
                 for m in st.session_state.chat_history[:-1]:
                     _msgs.append({"role": m["role"], "content": m["content"]})
-                _msgs.append({"role":"user","content":user_input})
+                _msgs.append({"role":"user","content":pending})
 
                 with st.spinner("ASTRO-தமிழன் பதில் தயாரிக்கிறார்..."):
                     reply, provider_used = get_ai_reply(_msgs, system_prompt)
@@ -886,7 +897,7 @@ with tabs[4]:
                     "star": "நட்சத்திரங்கள் வாயு மற்றும் தூளால் ஆனவை. ⭐ நம் சூரியன் ஒரு நட்சத்திரமே! பிரபஞ்சத்தில் கோடானகோடி நட்சத்திரங்கள் உள்ளன. Betelgeuse நட்சத்திரம் சூரியனை விட 700 மடங்கு பெரியது!",
                 }
                 reply = None
-                q_lower = user_input.lower()
+                q_lower = pending.lower()
                 for k, v in simulated.items():
                     if k in q_lower:
                         reply = v
