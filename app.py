@@ -4,8 +4,8 @@ import json
 import math
 import random
 import time
-import calendar
 from datetime import datetime, timezone, date, timedelta
+import calendar
 import os
 
 # ─────────────────────────────────────────────
@@ -910,14 +910,14 @@ with tabs[4]:
             st.session_state.input_key += 1
             st.rerun()
 
+
 # ══════════════════════════════════════════════
 # TAB 6 – MUHURTHAM CALENDAR
 # ══════════════════════════════════════════════
 with tabs[5]:
 
-    # ── Tamil month / nakshatra / tithi data ──────────────────────────────
     TAMIL_MONTHS = [
-        ("சித்திரை",  "Chithirai",  4,  5),   # (name, transliteration, greg_month_start, greg_day_start)
+        ("சித்திரை",  "Chithirai",  4,  14),
         ("வைகாசி",   "Vaikasi",    5,  15),
         ("ஆனி",      "Aani",       6,  15),
         ("ஆடி",      "Aadi",       7,  17),
@@ -933,15 +933,13 @@ with tabs[5]:
 
     TAMIL_WEEKDAYS = ["திங்கள்", "செவ்வாய்", "புதன்", "வியாழன்", "வெள்ளி", "சனி", "ஞாயிறு"]
 
-    # Nakshatras considered auspicious for muhurtham
     AUSPICIOUS_NAKSHATRAS = [
         "ரோகிணி", "மிருகசீரிஷம்", "உத்திரம்", "உத்திராடம்",
         "உத்திரட்டாதி", "ரேவதி", "அஸ்தம்", "சித்திரை நட்சத்திரம்",
         "சுவாதி", "அனுஷம்", "மூலம்"
     ]
 
-    # Inauspicious tithis (lunar days to avoid)
-    INAUSPICIOUS_TITHIS = [4, 8, 9, 14, 15, 30]  # Chaturthi, Ashtami, Navami, Chaturdashi, Amavasai, Pournami (for some events)
+    INAUSPICIOUS_TITHIS = [4, 8, 9, 14, 15, 30]
 
     MUHURTHAM_TYPES = {
         "திருமண முகூர்த்தம்": {"emoji": "💍", "desc": "திருமணத்திற்கான சுப தினங்கள்"},
@@ -951,51 +949,27 @@ with tabs[5]:
         "தொழில் தொடக்கம்":   {"emoji": "💼", "desc": "புதிய தொழில் தொடங்க சுப தினங்கள்"},
     }
 
-    # Days of week auspiciousness per muhurtham type (0=Mon..6=Sun)
     GOOD_WEEKDAYS = {
-        "திருமண முகூர்த்தம்": [0, 2, 3, 4],   # Mon,Wed,Thu,Fri
+        "திருமண முகூர்த்தம்": [0, 2, 3, 4],
         "கிரக பிரவேசம்":     [0, 2, 3, 4],
         "வாகன பூஜை":        [0, 1, 2, 3, 4],
         "நாமகரணம்":          [0, 2, 3, 4],
         "தொழில் தொடக்கம்":   [0, 2, 3, 4],
     }
 
-    def moon_phase(dt: date) -> float:
-        """Return moon age in days (0=new, ~14=full, ~29=new again).
-        Uses a simple astronomical approximation."""
+    def moon_phase(dt):
         known_new = date(2000, 1, 6)
         diff = (dt - known_new).days
         cycle = 29.53058867
-        age = diff % cycle
-        return age
+        return diff % cycle
 
-    def tithi_number(moon_age: float) -> int:
-        """Convert moon age to tithi (1-30)."""
+    def tithi_number(moon_age):
         return int(moon_age / (29.53058867 / 30)) + 1
 
-    def is_valarpirai(moon_age: float) -> bool:
-        """Waxing moon = Valarpirai (moon age 1–14.5 days)."""
+    def is_valarpirai(moon_age):
         return 0.5 <= moon_age <= 14.5
 
-    def get_tamil_month(dt: date) -> tuple:
-        """Return (tamil_month_name, transliteration) for a given Gregorian date."""
-        year = dt.year
-        for i, (tname, trans, gm, gd) in enumerate(TAMIL_MONTHS):
-            start = date(year if gm >= 4 else year, gm, gd)
-            # next month start
-            next_i = (i + 1) % 12
-            nm, nt, ngm, ngd = TAMIL_MONTHS[next_i]
-            ny = year if ngm > gm else (year + 1 if gm >= 10 else year)
-            # Thai starts Jan 14 — handle year boundary
-            if ngm < gm:
-                ny = year + 1
-            end = date(ny, ngm, ngd)
-            if start <= dt < end:
-                return tname, trans
-        return "தை", "Thai"
-
-    def nakshatra_for_day(dt: date) -> str:
-        """Approximate nakshatra (27-star cycle) for a given date."""
+    def nakshatra_for_day(dt):
         NAKSHATRAS = [
             "அஸ்வினி", "பரணி", "கிருத்திகை", "ரோகிணி", "மிருகசீரிஷம்",
             "திருவாதிரை", "புனர்பூசம்", "பூசம்", "ஆயில்யம்", "மகம்",
@@ -1006,69 +980,52 @@ with tabs[5]:
         ]
         ref = date(2000, 1, 1)
         diff = (dt - ref).days
-        idx = diff % 27
-        return NAKSHATRAS[idx]
+        return NAKSHATRAS[diff % 27]
 
-    def is_auspicious_day(dt: date, muhurtham_type: str) -> tuple:
-        """
-        Returns (is_auspicious: bool, score: int, reasons: list, warnings: list)
-        Score 0-100. reasons = positive factors, warnings = negative factors.
-        """
-        reasons = []
-        warnings = []
-        score = 50  # base
-
+    def is_auspicious_day(dt, muhurtham_type):
+        reasons, warnings_list = [], []
+        score = 50
         moon_age = moon_phase(dt)
         valarpirai = is_valarpirai(moon_age)
         tithi = tithi_number(moon_age)
         nakshatra = nakshatra_for_day(dt)
-        weekday = dt.weekday()  # 0=Mon
+        weekday = dt.weekday()
 
-        # Valarpirai bonus
         if valarpirai:
             score += 20
             reasons.append("🌙 வளர்பிறை (வாக்கிய சுபம்)")
         else:
             score -= 15
-            warnings.append("🌑 தேய்பிறை (தவிர்க்கவும்)")
+            warnings_list.append("🌑 தேய்பிறை (தவிர்க்கவும்)")
 
-        # Nakshatra check
         if nakshatra in AUSPICIOUS_NAKSHATRAS:
             score += 15
             reasons.append(f"⭐ சுப நட்சத்திரம்: {nakshatra}")
         else:
-            warnings.append(f"🔸 நட்சத்திரம்: {nakshatra}")
+            warnings_list.append(f"🔸 நட்சத்திரம்: {nakshatra}")
 
-        # Tithi check
         if tithi in INAUSPICIOUS_TITHIS:
             score -= 25
-            tithi_name = ["", "பிரதமை","த்விதியை","த்ருதியை","சதுர்த்தி","பஞ்சமி","ஷஷ்டி","சப்தமி","அஷ்டமி","நவமி","தசமி","ஏகாதசி","த்வாதசி","த்ரயோதசி","சதுர்த்தசி","பௌர்ணமி / அமாவாசை"]
-            safe_idx = tithi if tithi <= 15 else 15
-            warnings.append(f"⚠️ தவிர்க்க வேண்டிய திதி: {tithi_name[safe_idx]}")
+            warnings_list.append(f"⚠️ தவிர்க்க வேண்டிய திதி #{tithi}")
         else:
             score += 10
             reasons.append(f"✅ சுப திதி (திதி #{tithi})")
 
-        # Weekday check
         good_days = GOOD_WEEKDAYS.get(muhurtham_type, [0, 2, 3, 4])
         if weekday in good_days:
             score += 10
             reasons.append(f"📅 சுப வாரம்: {TAMIL_WEEKDAYS[weekday]}")
         else:
             score -= 10
-            warnings.append(f"📅 {TAMIL_WEEKDAYS[weekday]} — இந்த முகூர்த்தத்திற்கு சிறந்தது அல்ல")
+            warnings_list.append(f"📅 {TAMIL_WEEKDAYS[weekday]} — இந்த முகூர்த்தத்திற்கு சிறந்தது அல்ல")
 
-        # Clamp score
         score = max(0, min(100, score))
-        is_ausp = score >= 60
-
-        return is_ausp, score, reasons, warnings
+        return score >= 60, score, reasons, warnings_list
 
     # ── UI ────────────────────────────────────────────────────────────────
     st.markdown(f'<div class="section-title">🪔 முகூர்த்த நாட்காட்டி</div>', unsafe_allow_html=True)
     st.markdown('<div class="section-subtitle">தமிழ் பஞ்சாங்கம் அடிப்படையில் — சுப முகூர்த்த நாட்கள்</div>', unsafe_allow_html=True)
 
-    # Legend bar
     st.markdown(f"""
     <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:1.2rem;padding:0.8rem 1.2rem;
          background:{card_col};border-radius:12px;border:1px solid rgba(79,195,247,0.2);position:relative;z-index:1;">
@@ -1081,23 +1038,18 @@ with tabs[5]:
     </div>
     """, unsafe_allow_html=True)
 
-    # Controls row
     ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 2])
-
     with ctrl1:
         muhurtham_type = st.selectbox(
             "முகூர்த்த வகை தேர்வு:",
             list(MUHURTHAM_TYPES.keys()),
             format_func=lambda x: f"{MUHURTHAM_TYPES[x]['emoji']} {x}"
         )
-
     with ctrl2:
-        selected_year = st.selectbox(
-            "ஆண்டு தேர்வு:",
-            list(range(2024, 2028)),
-            index=list(range(2024, 2028)).index(datetime.now().year) if datetime.now().year in range(2024, 2028) else 0
-        )
-
+        year_options = list(range(2024, 2028))
+        cur_year = datetime.now().year
+        default_year_idx = year_options.index(cur_year) if cur_year in year_options else 0
+        selected_year = st.selectbox("ஆண்டு தேர்வு:", year_options, index=default_year_idx)
     with ctrl3:
         tamil_month_names = [f"{tm[0]} ({tm[1]})" for tm in TAMIL_MONTHS]
         selected_tm_idx = st.selectbox(
@@ -1108,34 +1060,36 @@ with tabs[5]:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Compute the Gregorian date range for the chosen Tamil month
+    # ── Compute Gregorian date range for chosen Tamil month ──
     tname, trans, gm_s, gd_s = TAMIL_MONTHS[selected_tm_idx]
     next_idx = (selected_tm_idx + 1) % 12
     _, _, gm_e, gd_e = TAMIL_MONTHS[next_idx]
 
-    # Handle year boundary
-    year_s = selected_year if gm_s >= 4 else selected_year
-    year_e = selected_year if gm_e > gm_s else selected_year + 1
-    if gm_e <= 3 and gm_s >= 10:
+    # Tamil Varsha: Chithirai(Apr)–Margazhi(Dec) = indices 0-8 → same Gregorian year
+    #               Thai(Jan)–Panguni(Mar)        = indices 9-11 → Gregorian year + 1
+    if selected_tm_idx <= 8:
+        year_s = selected_year
+        # next month Jan-Mar rolls into next Gregorian year
+        year_e = selected_year + 1 if next_idx >= 9 else selected_year
+    else:
+        year_s = selected_year + 1
+        # next month: if index 11 (Panguni) -> next is 0 (Chithirai) same +1 year; else still +1
         year_e = selected_year + 1
-    elif gm_s <= 3 and gm_e <= 3 and gm_e > gm_s:
-        year_e = selected_year
 
     try:
         month_start = date(year_s, gm_s, gd_s)
-        month_end = date(year_e, gm_e, gd_e)
+        month_end   = date(year_e, gm_e, gd_e)
     except ValueError:
-        month_start = date(selected_year, gm_s, 1)
-        month_end = date(selected_year, gm_s, 28)
+        month_start = date(year_s, gm_s, 1)
+        month_end   = date(year_s, gm_s, 28)
 
-    # Build list of days
     days_in_month = []
     cur = month_start
     while cur < month_end:
         days_in_month.append(cur)
         cur += timedelta(days=1)
 
-    # Month header card
+    # Month header
     m_info = MUHURTHAM_TYPES[muhurtham_type]
     st.markdown(f"""
     <div class="card" style="margin-bottom:1.5rem;text-align:center;">
@@ -1146,26 +1100,24 @@ with tabs[5]:
     </div>
     """, unsafe_allow_html=True)
 
-    # Calendar grid header
+    # Weekday header
     weekday_header_html = "".join(
         f'<div style="text-align:center;font-weight:700;font-size:0.78rem;color:{accent};padding:0.4rem 0;">{d}</div>'
         for d in TAMIL_WEEKDAYS
     )
 
-    # Build calendar cells
-    first_weekday = days_in_month[0].weekday()  # 0=Mon
-    cells = [""] * first_weekday + days_in_month
-
-    # Pad to complete last row
+    # Calendar cells
+    first_weekday = days_in_month[0].weekday()
+    cells = [None] * first_weekday + days_in_month
     while len(cells) % 7 != 0:
-        cells.append("")
+        cells.append(None)
 
     rows_html = ""
     for row_start in range(0, len(cells), 7):
         row = cells[row_start:row_start+7]
         row_html = ""
         for cell in row:
-            if cell == "":
+            if cell is None:
                 row_html += '<div></div>'
             else:
                 dt = cell
@@ -1173,31 +1125,16 @@ with tabs[5]:
                 moon_age = moon_phase(dt)
                 vp = is_valarpirai(moon_age)
                 nakshatra = nakshatra_for_day(dt)
-                tithi = tithi_number(moon_age)
                 moon_icon = "🌙" if vp else "🌑"
 
                 if score >= 80:
-                    cell_bg = "rgba(34,197,94,0.18)"
-                    border_col = "rgba(34,197,94,0.6)"
-                    score_color = "#4ade80"
-                    dot = "🟢"
+                    cell_bg, border_col, score_color, dot = "rgba(34,197,94,0.18)", "rgba(34,197,94,0.6)", "#4ade80", "🟢"
                 elif score >= 60:
-                    cell_bg = "rgba(234,179,8,0.15)"
-                    border_col = "rgba(234,179,8,0.5)"
-                    score_color = "#facc15"
-                    dot = "🟡"
+                    cell_bg, border_col, score_color, dot = "rgba(234,179,8,0.15)", "rgba(234,179,8,0.5)", "#facc15", "🟡"
                 else:
-                    cell_bg = "rgba(239,68,68,0.1)"
-                    border_col = "rgba(239,68,68,0.3)"
-                    score_color = "#f87171"
-                    dot = "🔴"
+                    cell_bg, border_col, score_color, dot = "rgba(239,68,68,0.1)", "rgba(239,68,68,0.3)", "#f87171", "🔴"
 
-                today_ring = ""
-                if dt == date.today():
-                    today_ring = f"box-shadow:0 0 0 2px {accent};"
-
-                tamil_day = ["திங்கள்","செவ்வாய்","புதன்","வியாழன்","வெள்ளி","சனி","ஞாயிறு"][dt.weekday()]
-
+                today_ring = f"box-shadow:0 0 0 2px {accent};" if dt == date.today() else ""
                 row_html += f"""
                 <div style="background:{cell_bg};border:1px solid {border_col};border-radius:10px;
                      padding:0.5rem 0.4rem;text-align:center;{today_ring}min-height:90px;
@@ -1205,7 +1142,7 @@ with tabs[5]:
                     <div style="font-size:1.1rem;font-weight:700;color:{score_color};">{dt.day}</div>
                     <div style="font-size:0.62rem;opacity:0.7;">{dt.strftime('%d %b')}</div>
                     <div style="font-size:0.75rem;">{moon_icon}</div>
-                    <div style="font-size:0.58rem;opacity:0.75;line-height:1.3;">{nakshatra[:6]}</div>
+                    <div style="font-size:0.58rem;opacity:0.75;line-height:1.3;">{nakshatra[:8]}</div>
                     <div style="font-size:0.65rem;font-weight:600;">{dot} {score}</div>
                 </div>"""
         rows_html += f'<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:6px;">{row_html}</div>'
@@ -1221,7 +1158,7 @@ with tabs[5]:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Auspicious days list ────────────────────────────────────────────
+    # Auspicious days list
     st.markdown(f'<div style="font-size:1.2rem;font-weight:700;color:{accent};margin-bottom:0.8rem;">✨ {tname} மாதம் — சிறந்த முகூர்த்த நாட்கள்</div>', unsafe_allow_html=True)
 
     best_days = []
@@ -1229,7 +1166,6 @@ with tabs[5]:
         is_ausp, score, reasons, warnings_list = is_auspicious_day(dt, muhurtham_type)
         if is_ausp:
             best_days.append((dt, score, reasons, warnings_list))
-
     best_days.sort(key=lambda x: -x[1])
 
     if best_days:
@@ -1243,14 +1179,11 @@ with tabs[5]:
                     vp = is_valarpirai(moon_age)
                     tithi = tithi_number(moon_age)
                     nak = nakshatra_for_day(dt)
-                    score_bg = "#166534" if score >= 80 else "#713f12"
+                    score_bg   = "#166534" if score >= 80 else "#713f12"
                     score_text = "#4ade80" if score >= 80 else "#facc15"
                     weekday_ta = TAMIL_WEEKDAYS[dt.weekday()]
-                    tm_month, _ = get_tamil_month(dt)
-
                     reasons_html = "".join(f'<div style="font-size:0.72rem;color:#86efac;margin:1px 0;">{r}</div>' for r in reasons)
                     warn_html    = "".join(f'<div style="font-size:0.72rem;color:#fca5a5;margin:1px 0;">{w}</div>' for w in warnings_list)
-
                     st.markdown(f"""
                     <div class="card" style="margin-bottom:0.8rem;padding:1rem;">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
@@ -1258,8 +1191,7 @@ with tabs[5]:
                                 <span style="font-size:1.3rem;font-weight:700;color:{accent};">{dt.day}</span>
                                 <span style="font-size:0.78rem;opacity:0.7;margin-left:4px;">{dt.strftime('%b %Y')}</span>
                             </div>
-                            <div style="background:{score_bg};color:{score_text};
-                                 padding:2px 8px;border-radius:20px;font-size:0.75rem;font-weight:700;">
+                            <div style="background:{score_bg};color:{score_text};padding:2px 8px;border-radius:20px;font-size:0.75rem;font-weight:700;">
                                 {score}/100
                             </div>
                         </div>
@@ -1280,13 +1212,10 @@ with tabs[5]:
             <div style="color:{accent};font-size:1rem;margin-top:0.5rem;">
                 இந்த மாதம் {muhurtham_type}-க்கு சுப தினங்கள் குறைவாக உள்ளன.
             </div>
-            <div style="font-size:0.85rem;opacity:0.65;margin-top:0.4rem;">
-                வேறு மாதம் அல்லது முகூர்த்த வகை தேர்ந்தெடுக்கவும்.
-            </div>
+            <div style="font-size:0.85rem;opacity:0.65;margin-top:0.4rem;">வேறு மாதம் அல்லது முகூர்த்த வகை தேர்ந்தெடுக்கவும்.</div>
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Panchangam info box ─────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown(f"""
     <div class="card" style="margin-top:0.5rem;">
@@ -1302,11 +1231,11 @@ with tabs[5]:
             </div>
             <div>
                 <b style="color:{accent};">⭐ சுப நட்சத்திரங்கள்</b><br>
-                ரோகிணி, மிருகசீரிஷம், உத்திரம், உத்திராடம், உத்திரட்டாதி, ரேவதி, அஸ்தம், சுவாதி, அனுஷம் — இவை சுப கர்மங்களுக்கு உகந்தவை.
+                ரோகிணி, மிருகசீரிஷம், உத்திரம், உத்திராடம், உத்திரட்டாதி, ரேவதி, அஸ்தம், சுவாதி, அனுஷம் — சுப கர்மங்களுக்கு உகந்தவை.
             </div>
             <div>
                 <b style="color:{accent};">📅 சுப வாரங்கள்</b><br>
-                திங்கள் (சந்திரன்), புதன் (புதன்), வியாழன் (குரு), வெள்ளி (சுக்கிரன்) — இந்நான்கு நாட்களும் பொதுவாக முகூர்த்தங்களுக்கு சிறந்தவை.
+                திங்கள் (சந்திரன்), புதன் (புதன்), வியாழன் (குரு), வெள்ளி (சுக்கிரன்) — இந்நான்கு நாட்களும் முகூர்த்தங்களுக்கு சிறந்தவை.
             </div>
         </div>
         <div style="margin-top:0.8rem;font-size:0.72rem;opacity:0.55;border-top:1px solid rgba(79,195,247,0.15);padding-top:0.6rem;">
@@ -1314,6 +1243,7 @@ with tabs[5]:
         </div>
     </div>
     """, unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────
 # FOOTER
